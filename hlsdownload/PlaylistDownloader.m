@@ -15,13 +15,21 @@ static NSString *BANDWIDTH = @"BANDWIDTH";
 static NSString *EXT_X_ENDLIST = @"EXT-X-ENDLIST";
 static NSString *EXT_X_TARGETDURATION = @"EXT-X-TARGETDURATION";
 
+#define USE_ORDERED_SET 0
+#define USE_NSREGULAREXPRESSION 0
 
 @interface PlaylistDownloader ()
 
+#if USE_ORDERED_SET
+#define LIST_TYPE NSMutableOrderedSet
+#else
+#define LIST_TYPE NSMutableArray
+#endif
+@property (retain) LIST_TYPE *playlistSet;
+@property (retain) LIST_TYPE *downloadedSet;
+
 @property (retain) NSFileHandle *stdoutHandle;
 @property (retain) NSFileHandle *outputFileHandle;
-@property (retain) NSMutableOrderedSet *playlistSet;
-@property (retain) NSMutableOrderedSet *downloadedSet;
 @property NSTimeInterval startTime;
 @property NSTimeInterval maxSegmentInterval;
 @property NSTimeInterval elapsedRecordingTime;
@@ -37,10 +45,15 @@ static NSString *EXT_X_TARGETDURATION = @"EXT-X-TARGETDURATION";
 {
     self = [super init];
     if (self) {
-        self.playlistURL = playlistURL;
-        self.stdoutHandle = [NSFileHandle fileHandleWithStandardOutput];
+#if USE_ORDERED_SET
         self.playlistSet = [NSMutableOrderedSet orderedSetWithCapacity:0];
         self.downloadedSet = [NSMutableOrderedSet orderedSetWithCapacity:0];
+#else
+        self.playlistSet = [NSMutableArray arrayWithCapacity:0];
+        self.downloadedSet = [NSMutableArray arrayWithCapacity:0];
+#endif
+        self.playlistURL = playlistURL;
+        self.stdoutHandle = [NSFileHandle fileHandleWithStandardOutput];
         self.endList = NO;
         self.didCancel = NO;
         self.elapsedRecordingTime = 0.0;
@@ -69,7 +82,7 @@ static NSString *EXT_X_TARGETDURATION = @"EXT-X-TARGETDURATION";
         @autoreleasepool {            
             NSTimeInterval playlistStartTime = [NSDate timeIntervalSinceReferenceDate];
             NSTimeInterval segmentTime = self.maxSegmentInterval;
-            NSOrderedSet *dlSet = [self updatePlaylist];
+            LIST_TYPE *dlSet = [self updatePlaylist];
             if (!dlSet) {
                 break;
             }
@@ -119,15 +132,20 @@ static NSString *EXT_X_TARGETDURATION = @"EXT-X-TARGETDURATION";
     self.didCancel = YES;
 }
 
-- (NSOrderedSet *)updatePlaylist
+- (LIST_TYPE *)updatePlaylist
 {
     NSArray *currentPlaylist = [self fetchPlaylist];
     [self.playlistSet removeAllObjects];
     if (currentPlaylist) {
         [self.playlistSet addObjectsFromArray:currentPlaylist];
-        
+
+#if USE_ORDERED_SET
         NSMutableOrderedSet *toBeDownloadedSet = [self.playlistSet mutableCopy];
         [toBeDownloadedSet minusOrderedSet:self.downloadedSet];
+#else
+        NSMutableArray *toBeDownloadedSet = [self.playlistSet mutableCopy];
+        [toBeDownloadedSet removeObjectsInArray:self.downloadedSet];
+#endif
         return toBeDownloadedSet;
     }
     return nil;
@@ -176,6 +194,7 @@ static NSString *EXT_X_TARGETDURATION = @"EXT-X-TARGETDURATION";
         }
         if (isMaster && [line rangeOfString:BANDWIDTH].length > 0) {
             NSInteger bandwidth = 0;
+#if USE_NSREGULAREXPRESSION
             NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"BANDWIDTH=([0-9]+)" options:0 error:&error];
             NSArray *matches = [re matchesInString:line options:0 range:NSMakeRange(0, [line length])];
             if (matches && [matches count] > 0) {
@@ -183,6 +202,12 @@ static NSString *EXT_X_TARGETDURATION = @"EXT-X-TARGETDURATION";
                 NSString *bwStr = [line substringWithRange:[result rangeAtIndex:1]];
                 bandwidth = [bwStr integerValue];
             }
+#else
+            NSScanner *scanner = [NSScanner scannerWithString:line];
+            [scanner scanUpToString:@"BANDWIDTH=" intoString:nil];
+            [scanner scanString:@"BANDWIDTH=" intoString:nil];
+            [scanner scanInteger:&bandwidth];
+#endif
             
             maxRate = MAX(bandwidth, maxRate);            
             if (bandwidth == maxRate) {
